@@ -1,10 +1,10 @@
 import streamlit as st
-import pandas as pd
 import requests
+import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 
-# Arabam.com'dan almak istediğimiz markalar ve modeller
+# Arabam.com'dan çekeceğimiz marka ve modeller
 TARGET_CARS = {
     "Audi": ["A3"],
     "BMW": ["3 Serisi"],
@@ -18,69 +18,53 @@ TARGET_CARS = {
     "Volkswagen": ["Polo", "Passat", "Golf"]
 }
 
-# Filtre kriterleri
-MAX_AGE_YEARS = 10  # 10 yaşından büyük olmayacak
-MAX_KM = 150000  # 150.000 km üstü olmayacak
-MAX_PRICE = 1750000  # 1.750.000 TL üstü olmayacak
-DAYS_LIMIT = 120  # Son 120 gün içinde listelenen araçlar
+# Sabitler
+MAX_YAS = 10
+MAX_KM = 150000
+MAX_FIYAT = 1750000
+ILAN_TARIHI_LIMIT = datetime.now() - timedelta(days=120)
 
-st.title("Arabam.com Araç Fiyat Analizi")
+st.title("Arabam.com Veri Çekme Uygulaması")
 
 if st.button("Verileri Çek"):
-    st.write("Veriler çekiliyor... Lütfen bekleyin.")
+    data = []
+    headers = {"User-Agent": "Mozilla/5.0"}
     
-    base_url = "https://www.arabam.com"
-    results = []
-    cutoff_date = datetime.now() - timedelta(days=DAYS_LIMIT)
-    
-    for brand, models in TARGET_CARS.items():
-        for model in models:
-            search_url = f"{base_url}/ikinci-el/otomobil/{brand.lower()}-{model.lower()}"
-            headers = {"User-Agent": "Mozilla/5.0"}
+    for marka, modeller in TARGET_CARS.items():
+        for model in modeller:
+            url = f"https://www.arabam.com/ikinci-el/otomobil/{marka.lower().replace(' ', '-')}-{model.lower().replace(' ', '-')}"
             
-            response = requests.get(search_url, headers=headers)
+            response = requests.get(url, headers=headers)
             if response.status_code != 200:
-                st.error(f"Bağlantı hatası: {brand} {model} için veriler alınamadı.")
+                st.error(f"Bağlantı hatası: {marka} {model} için veri çekilemedi!")
                 continue
             
             soup = BeautifulSoup(response.text, "html.parser")
-            listings = soup.find_all("div", class_="listing-item")
+            ilanlar = soup.find_all("div", class_="listing-item")
             
-            for listing in listings:
+            for ilan in ilanlar:
                 try:
-                    title = listing.find("h3", class_="listing-title").text.strip()
-                    price = listing.find("span", class_="listing-price").text.strip()
-                    km = listing.find("li", class_="listing-km").text.strip()
-                    year = listing.find("li", class_="listing-year").text.strip()
-                    city = listing.find("li", class_="listing-location").text.strip()
-                    date = listing.find("li", class_="listing-date").text.strip()
+                    ilan_baslik = ilan.find("h3", class_="listing-title").text.strip()
+                    fiyat = ilan.find("div", class_="listing-price").text.strip().replace(" TL", "").replace(".", "")
+                    fiyat = int(fiyat) if fiyat.isdigit() else None
+                    km = ilan.find("div", class_="listing-detail").text.strip().split(" ")[0].replace(".", "")
+                    km = int(km) if km.isdigit() else None
+                    yil = int(ilan_baslik.split(" ")[-1]) if ilan_baslik.split(" ")[-1].isdigit() else None
+                    ilan_tarihi_str = ilan.find("span", class_="listing-date").text.strip()
+                    ilan_tarihi = datetime.strptime(ilan_tarihi_str, "%d.%m.%Y") if ilan_tarihi_str else None
+                    sehir_ilce = ilan.find("div", class_="listing-location").text.strip()
                     
-                    price = int(price.replace("TL", "").replace(".", "").strip())
-                    km = int(km.replace("km", "").replace(".", "").strip())
-                    year = int(year)
-                    
-                    # 120 gün sınırı
-                    ilan_tarihi = datetime.strptime(date, "%d.%m.%Y")
-                    if ilan_tarihi < cutoff_date:
-                        continue
-                    
-                    # Filtreleme koşulları
-                    if year < (datetime.now().year - MAX_AGE_YEARS) or km > MAX_KM or price > MAX_PRICE:
-                        continue
-                    
-                    results.append([brand, model, title, year, km, price, city, ilan_tarihi.strftime("%d.%m.%Y")])
-                except Exception as e:
+                    if yil and km and fiyat and ilan_tarihi:
+                        if yil >= (datetime.now().year - MAX_YAS) and km <= MAX_KM and fiyat <= MAX_FIYAT and ilan_tarihi >= ILAN_TARIHI_LIMIT:
+                            data.append([marka, model, ilan_baslik, yil, km, fiyat, ilan_tarihi_str, sehir_ilce])
+                except:
                     continue
     
-    if results:
-        df = pd.DataFrame(results, columns=["Marka", "Model", "Başlık", "Yıl", "KM", "Fiyat", "Şehir", "İlan Tarihi"])
-        df.to_excel("arabam_scraper.xlsx", index=False)
-        st.success("Veriler başarıyla çekildi ve 'arabam_scraper.xlsx' olarak kaydedildi!")
-        st.download_button(
-            label="Excel Dosyasını İndir",
-            data=open("arabam_scraper.xlsx", "rb").read(),
-            file_name="arabam_scraper.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    df = pd.DataFrame(data, columns=["Marka", "Model", "İlan Başlığı", "Yıl", "KM", "Fiyat", "İlan Tarihi", "Şehir/İlçe"])
+    if df.empty:
+        st.warning("Belirlenen kriterlere uygun ilan bulunamadı!")
     else:
-        st.warning("Filtrelere uygun veri bulunamadı.")
+        st.success(f"{len(df)} ilan başarıyla çekildi!")
+        df.to_excel("arabam_verileri.xlsx", index=False)
+        with open("arabam_verileri.xlsx", "rb") as f:
+            st.download_button("Excel Dosyasını İndir", f, file_name="arabam_verileri.xlsx")
