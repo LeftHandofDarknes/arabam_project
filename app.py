@@ -1,85 +1,86 @@
 import streamlit as st
-import requests
 import pandas as pd
-from datetime import datetime, timedelta
+import requests
 from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 
-# Filtreleme kriterleri
-MIN_YIL = 2015
-MAX_KM = 150000
-MAX_FIYAT = 1750000  # 1.750.000 TL’den pahalı olamaz
-DAYS_LIMIT = 120  # İlan tarihi 120 günden eski olanları almayacak
+# Arabam.com'dan almak istediğimiz markalar ve modeller
+TARGET_CARS = {
+    "Audi": ["A3"],
+    "BMW": ["3 Serisi"],
+    "Ford": ["Focus"],
+    "Honda": ["Civic"],
+    "Hyundai": ["i20"],
+    "Mercedes - Benz": ["C Serisi"],
+    "Renault": ["Clio", "Megane", "Symbol"],
+    "Skoda": ["Octavia", "SüperB"],
+    "Toyota": ["Corolla"],
+    "Volkswagen": ["Polo", "Passat", "Golf"]
+}
 
-# Takip edilecek marka ve modeller
-MARKALAR_MODELLER = [
-    "audi/a3",
-    "bmw/3-serisi",
-    "ford/focus",
-    "honda/civic",
-    "hyundai/i20",
-    "mercedes-benz/c-serisi",
-    "renault/clio",
-    "renault/megane",
-    "renault/symbol",
-    "skoda/octavia",
-    "skoda/superb",
-    "toyota/corolla",
-    "volkswagen/polo",
-    "volkswagen/passat",
-    "volkswagen/golf"
-]
-
-BASE_URL = "https://www.arabam.com/ikinci-el/otomobil/"
+# Filtre kriterleri
+MAX_AGE_YEARS = 10  # 10 yaşından büyük olmayacak
+MAX_KM = 150000  # 150.000 km üstü olmayacak
+MAX_PRICE = 1750000  # 1.750.000 TL üstü olmayacak
+DAYS_LIMIT = 120  # Son 120 gün içinde listelenen araçlar
 
 st.title("Arabam.com Araç Fiyat Analizi")
-st.write("Seçilen marka ve modellere göre ikinci el araç fiyatlarını çekmek için butona basın.")
 
 if st.button("Verileri Çek"):
-    ilanlar = []
-
-    for marka_model in MARKALAR_MODELLER:
-        url = f"{BASE_URL}{marka_model}?minYear={MIN_YIL}&maxkm={MAX_KM}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            st.error(f"{marka_model} için veri çekilemedi!")
-            continue
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        ilan_listesi = soup.find_all("tr", class_="listing-item")
-
-        for ilan in ilan_listesi:
-            try:
-                fiyat = ilan.find("td", class_="listing-price").text.strip()
-                fiyat = int(fiyat.replace(".", "").replace("TL", "").strip())
-
-                if fiyat > MAX_FIYAT:
-                    continue  # Maksimum fiyatı aşanları alma
-
-                tarih = ilan.find("td", class_="listing-date").text.strip()
-                ilan_tarihi = datetime.strptime(tarih, "%d.%m.%Y")
-
-                if ilan_tarihi < datetime.now() - timedelta(days=DAYS_LIMIT):
-                    continue  # 120 günden eski ilanları alma
-                
-                sehir = ilan.find("td", class_="listing-location").text.strip()
-                arac_detay = ilan.find("td", class_="listing-modelname").text.strip()
-                km = ilan.find("td", class_="listing-km").text.strip()
-
-                ilanlar.append([marka_model, arac_detay, fiyat, km, sehir, ilan_tarihi.strftime("%d-%m-%Y")])
-
-            except Exception as e:
+    st.write("Veriler çekiliyor... Lütfen bekleyin.")
+    
+    base_url = "https://www.arabam.com"
+    results = []
+    cutoff_date = datetime.now() - timedelta(days=DAYS_LIMIT)
+    
+    for brand, models in TARGET_CARS.items():
+        for model in models:
+            search_url = f"{base_url}/ikinci-el/otomobil/{brand.lower()}-{model.lower()}"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            
+            response = requests.get(search_url, headers=headers)
+            if response.status_code != 200:
+                st.error(f"Bağlantı hatası: {brand} {model} için veriler alınamadı.")
                 continue
-
-    # Verileri DataFrame'e çevir
-    df = pd.DataFrame(ilanlar, columns=["Marka/Model", "Alt Model", "Fiyat", "KM", "Şehir", "İlan Tarihi"])
-
-    if df.empty:
-        st.warning("Belirtilen kriterlere uygun ilan bulunamadı.")
+            
+            soup = BeautifulSoup(response.text, "html.parser")
+            listings = soup.find_all("div", class_="listing-item")
+            
+            for listing in listings:
+                try:
+                    title = listing.find("h3", class_="listing-title").text.strip()
+                    price = listing.find("span", class_="listing-price").text.strip()
+                    km = listing.find("li", class_="listing-km").text.strip()
+                    year = listing.find("li", class_="listing-year").text.strip()
+                    city = listing.find("li", class_="listing-location").text.strip()
+                    date = listing.find("li", class_="listing-date").text.strip()
+                    
+                    price = int(price.replace("TL", "").replace(".", "").strip())
+                    km = int(km.replace("km", "").replace(".", "").strip())
+                    year = int(year)
+                    
+                    # 120 gün sınırı
+                    ilan_tarihi = datetime.strptime(date, "%d.%m.%Y")
+                    if ilan_tarihi < cutoff_date:
+                        continue
+                    
+                    # Filtreleme koşulları
+                    if year < (datetime.now().year - MAX_AGE_YEARS) or km > MAX_KM or price > MAX_PRICE:
+                        continue
+                    
+                    results.append([brand, model, title, year, km, price, city, ilan_tarihi.strftime("%d.%m.%Y")])
+                except Exception as e:
+                    continue
+    
+    if results:
+        df = pd.DataFrame(results, columns=["Marka", "Model", "Başlık", "Yıl", "KM", "Fiyat", "Şehir", "İlan Tarihi"])
+        df.to_excel("arabam_scraper.xlsx", index=False)
+        st.success("Veriler başarıyla çekildi ve 'arabam_scraper.xlsx' olarak kaydedildi!")
+        st.download_button(
+            label="Excel Dosyasını İndir",
+            data=open("arabam_scraper.xlsx", "rb").read(),
+            file_name="arabam_scraper.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
     else:
-        # Excel olarak kaydetme
-        file_path = "arabam_fiyatlar.xlsx"
-        df.to_excel(file_path, index=False)
-        st.success("Veriler başarıyla çekildi ve kaydedildi!")
-        st.download_button(label="Excel'i İndir", data=open(file_path, "rb"), file_name=file_path, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.warning("Filtrelere uygun veri bulunamadı.")
