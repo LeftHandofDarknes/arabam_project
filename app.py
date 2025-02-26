@@ -1,98 +1,77 @@
 import streamlit as st
-import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+import pandas as pd
+import time
 
-# Uygulama Başlığı
-st.set_page_config(page_title="Arabam.com Veri Toplayıcı", page_icon="🚗")
+# Kullanıcı arayüzü başlığı
 st.title("🚗 Arabam.com Veri Toplayıcı")
 st.write("Belirli kriterlere göre Arabam.com'dan ikinci el araç ilanlarını çekin ve analiz edin.")
 
-# Kullanıcının belirlediği marka ve modeller
-TARGET_CARS = {
-    "Audi": ["A3"],
-    "BMW": ["3 Serisi"],
-    "Ford": ["Focus"],
-    "Honda": ["Civic"],
-    "Hyundai": ["i20"],
-    "Mercedes-Benz": ["C Serisi"],
+# Kullanıcıdan almak istediğimiz markalar
+MARKALAR_MODELLER = {
+    "Audi": "A3",
+    "BMW": "3 Serisi",
+    "Ford": "Focus",
+    "Honda": "Civic",
+    "Hyundai": "i20",
+    "Mercedes-Benz": "C Serisi",
     "Renault": ["Clio", "Megane", "Symbol"],
     "Skoda": ["Octavia", "SuperB"],
-    "Toyota": ["Corolla"],
+    "Toyota": "Corolla",
     "Volkswagen": ["Polo", "Passat", "Golf"]
 }
 
-# Kısıtlayıcı Filtreler
-MAX_YEARS_OLD = 10  # Maksimum yaş (Örneğin 2015 ve sonrası)
-MAX_KM = 150000  # Maksimum kilometre
-MAX_PRICE = 1750000  # Maksimum fiyat (TL)
+# Filtreler
+MAX_YAS = 10
+MAX_KM = 150000
+MAX_FIYAT = 1750000  # 1.750.000 TL’den pahalı olamaz
 
-# Arabam.com URL formatı
-BASE_URL = "https://www.arabam.com/ikinci-el/otomobil/{brand}-{model}?maxkm={max_km}&minYear={min_year}&currency=TL&maxPrice={max_price}"
+# Kullanıcı seçimi
+selected_brand = st.selectbox("Lütfen bir marka seçin:", list(MARKALAR_MODELLER.keys()))
+selected_model = st.selectbox("Lütfen bir model seçin:", MARKALAR_MODELLER[selected_brand] if isinstance(MARKALAR_MODELLER[selected_brand], list) else [MARKALAR_MODELLER[selected_brand]])
 
-# Kullanıcının araç seçimi
-brand = st.selectbox("Lütfen bir marka seçin:", list(TARGET_CARS.keys()))
-if brand:
-    model = st.selectbox("Lütfen bir model seçin:", TARGET_CARS[brand])
-
+# Veriyi çekmek için buton
+temp_message = st.empty()
 if st.button("Verileri Çek"):
-    with st.spinner(f"{brand} {model} için veriler çekiliyor..."):
+    temp_message.info(f"'{selected_brand} {selected_model}' için veriler çekiliyor...")
+    
+    base_url = f"https://www.arabam.com/ikinci-el/{selected_brand.lower()}-{selected_model.lower()}"
+    params = {"maxPrice": MAX_FIYAT, "minYear": 2025 - MAX_YAS, "maxkm": MAX_KM}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
+    
+    response = requests.get(base_url, params=params, headers=headers)
+    
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        ilanlar = []
 
-        # Arabam.com’dan belirlenen filtrelere göre ilanları çek
-        url = BASE_URL.format(
-            brand=brand.lower().replace(" ", "-"),
-            model=model.lower().replace(" ", "-"),
-            max_km=MAX_KM,
-            min_year=2025 - MAX_YEARS_OLD,
-            max_price=MAX_PRICE
-        )
-
-        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            listings = []
-
-            # Sayfadaki tüm ilanları bul
-            for listing in soup.find_all("tr", class_="listing-row"):
-                try:
-                    alt_model = listing.find("td", class_="model").text.strip()
-                    ilan_basligi = listing.find("td", class_="listing-title").text.strip()
-                    yil = listing.find("td", class_="year").text.strip()
-                    km = listing.find("td", class_="km").text.strip().replace(".", "")
-                    renk = listing.find("td", class_="color").text.strip()
-                    fiyat = listing.find("td", class_="price").text.strip().replace(".", "").replace("TL", "")
-                    tarih = listing.find("td", class_="date").text.strip()
-                    il_ilce = listing.find("td", class_="location").text.strip()
-                    ilan_url = listing.find("a", class_="listing-link")["href"]
-
-                    # Filtreleme kriterlerine uyan ilanları ekle
-                    if int(yil) >= (2025 - MAX_YEARS_OLD) and int(km) <= MAX_KM and int(fiyat) <= MAX_PRICE:
-                        listings.append([brand, model, alt_model, ilan_basligi, yil, km, renk, fiyat, tarih, il_ilce, f"https://www.arabam.com{ilan_url}"])
-
-                except Exception as e:
-                    continue  # Eğer bir hata olursa geç
-
-            # Eğer ilan bulunduysa tablo göster ve indirilebilir Excel oluştur
-            if listings:
-                df = pd.DataFrame(listings, columns=["Marka", "Model", "Alt Model", "İlan Başlığı", "Yıl", "Kilometre", "Renk", "Fiyat", "Tarih", "İl/İlçe", "İlan URL"])
-                st.success(f"{len(df)} ilan bulundu!")
-
-                # DataFrame'i göster
-                st.dataframe(df)
-
-                # Excel olarak indirme seçeneği
-                @st.cache_data
-                def convert_df(df):
-                    return df.to_excel(index=False).encode("utf-8")
-
-                st.download_button(
-                    label="📥 Excel İndir",
-                    data=convert_df(df),
-                    file_name=f"{brand}_{model}_ilanlar.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                st.warning("⚠️ Filtrelere uygun ilan bulunamadı.")
+        for ilan in soup.find_all("tr", class_="listing-item"):  # Arabam.com'un güncel yapısına bakarak güncellenebilir
+            try:
+                model = ilan.find("td", class_="listing-model").text.strip()
+                ilan_baslik = ilan.find("td", class_="listing-title").text.strip()
+                yil = int(ilan.find("td", class_="listing-year").text.strip())
+                km = int(ilan.find("td", class_="listing-km").text.replace(".", "").strip())
+                renk = ilan.find("td", class_="listing-color").text.strip()
+                fiyat = int(ilan.find("td", class_="listing-price").text.replace(" TL", "").replace(".", "").strip())
+                tarih = ilan.find("td", class_="listing-date").text.strip()
+                il_ilce = ilan.find("td", class_="listing-location").text.strip()
+                ilan_url = ilan.find("a", class_="listing-link")["href"]
+                ilan_url = f"https://www.arabam.com{ilan_url}"
+                
+                if yil >= (2025 - MAX_YAS) and km <= MAX_KM and fiyat <= MAX_FIYAT:
+                    ilanlar.append([model, ilan_baslik, yil, km, renk, fiyat, tarih, il_ilce, ilan_url])
+            except Exception as e:
+                print(f"Hata oluştu: {e}")
+                continue
+    
+        if ilanlar:
+            df = pd.DataFrame(ilanlar, columns=["Model", "İlan Başlığı", "Yıl", "Kilometre", "Renk", "Fiyat", "Tarih", "İl / İlçe", "İlan URL"])
+            st.success("Veriler başarıyla çekildi!")
+            st.dataframe(df)
+            df.to_excel("arabam_verileri.xlsx", index=False)
+            st.download_button("Excel İndir", data=open("arabam_verileri.xlsx", "rb"), file_name="arabam_verileri.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
-            st.error("❌ Arabam.com ile bağlantı kurulamadı. Lütfen tekrar deneyin.")
+            st.warning("Filtrelere uygun ilan bulunamadı.")
+    else:
+        st.error("Arabam.com ile bağlantı kurulamadı. Lütfen tekrar deneyin.")
