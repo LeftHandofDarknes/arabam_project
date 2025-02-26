@@ -1,119 +1,103 @@
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
+from bs4 import BeautifulSoup
 
-# Sabitler
-MAX_YAS = 10  # 10 yaşından büyük araçlara bakılmayacak
-MAX_KM = 150000  # 150.000 KM üzeri araçlara bakılmayacak
-MAX_FIYAT = 1750000  # 1.750.000 TL’den pahalı araçlara bakılmayacak
+# Arabam.com URL'leri
+BASE_URL = "https://www.arabam.com"
+MARKA_URL = f"{BASE_URL}/arabalar"
 
-# Arabam.com'dan marka ve model listesini çekme fonksiyonu
-def get_brand_model_options():
-    url = "https://www.arabam.com/ikinci-el"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
-    
+# Kullanıcı filtreleri
+MAX_YAS = 10  # 10 yaşından büyük olmayacak
+MAX_KM = 150000  # 150.000 km’den fazla olmayacak
+MAX_FIYAT = 1750000  # 1.750.000 TL’den pahalı olmayacak
+
+# Header bilgisi (Bot engellemeyi aşmak için)
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+# Arabam.com'dan markaları al
+@st.cache_data
+def get_brands():
+    response = requests.get(MARKA_URL, headers=HEADERS)
     if response.status_code != 200:
-        return {}, {}
-    
-    soup = BeautifulSoup(response.text, 'html.parser')
-    brands = {}
-    
-    brand_elements = soup.select(".filter-list a")
-    for brand in brand_elements:
-        brand_name = brand.text.strip()
-        brand_url = brand["href"]
-        brands[brand_name] = brand_url
-    
+        return []
+    soup = BeautifulSoup(response.text, "html.parser")
+    brands = {item.text.strip(): item["href"] for item in soup.select(".brand-item a")}
     return brands
 
-# Marka ve modelleri al
-brands = get_brand_model_options()
+# Seçilen markaya göre modelleri al
+@st.cache_data
+def get_models(brand_url):
+    response = requests.get(BASE_URL + brand_url, headers=HEADERS)
+    if response.status_code != 200:
+        return []
+    soup = BeautifulSoup(response.text, "html.parser")
+    models = {item.text.strip(): item["href"] for item in soup.select(".model-item a")}
+    return models
 
+# Seçilen modele göre alt modelleri al
+@st.cache_data
+def get_submodels(model_url):
+    response = requests.get(BASE_URL + model_url, headers=HEADERS)
+    if response.status_code != 200:
+        return []
+    soup = BeautifulSoup(response.text, "html.parser")
+    submodels = {item.text.strip(): item["href"] for item in soup.select(".submodel-item a")}
+    return submodels
+
+# Sayfa başlığı
 st.title("Arabam.com Veri Çekme Uygulaması")
 
 # Marka seçimi
-dropdown_brands = list(brands.keys())
-selected_brand = st.selectbox("Bir Marka Seçin", dropdown_brands)
+brands = get_brands()
+brand_name = st.selectbox("Marka Seçin", ["Seçiniz"] + list(brands.keys()))
 
-# Model ve alt model dinamik olarak seçilecek
-if selected_brand:
-    brand_url = brands[selected_brand]
-    
-    # Model seçeneklerini çekelim
-    model_url = f"https://www.arabam.com{brand_url}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(model_url, headers=headers)
-    
-    models = {}
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        model_elements = soup.select(".filter-list a")
-        for model in model_elements:
-            model_name = model.text.strip()
-            model_url = model["href"]
-            models[model_name] = model_url
-    
-    dropdown_models = list(models.keys())
-    selected_model = st.selectbox("Bir Model Seçin", dropdown_models)
-    
-    if selected_model:
-        model_url = models[selected_model]
-        
-        # Alt model çekme işlemi
-        alt_model_url = f"https://www.arabam.com{model_url}"
-        response = requests.get(alt_model_url, headers=headers)
-        
-        alt_models = {}
+# Model seçimi (Eğer marka seçilmişse)
+if brand_name != "Seçiniz":
+    models = get_models(brands[brand_name])
+    model_name = st.selectbox("Model Seçin", ["Seçiniz"] + list(models.keys()))
+else:
+    model_name = "Seçiniz"
+
+# Alt model seçimi (Eğer model seçilmişse)
+if model_name != "Seçiniz":
+    submodels = get_submodels(models[model_name])
+    submodel_name = st.selectbox("Alt Model Seçin", ["Seçiniz"] + list(submodels.keys()))
+else:
+    submodel_name = "Seçiniz"
+
+# "Verileri Çek" butonu (Eğer her şey seçilmişse aktif olur)
+if submodel_name != "Seçiniz":
+    if st.button("Verileri Çek"):
+        ilan_url = f"{BASE_URL}{submodels[submodel_name]}?minYear=2015&maxkm=150000"
+        response = requests.get(ilan_url, headers=HEADERS)
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            alt_model_elements = soup.select(".filter-list a")
-            for alt_model in alt_model_elements:
-                alt_model_name = alt_model.text.strip()
-                alt_model_url = alt_model["href"]
-                alt_models[alt_model_name] = alt_model_url
-        
-        dropdown_alt_models = list(alt_models.keys())
-        selected_alt_model = st.selectbox("Bir Alt Model Seçin", dropdown_alt_models)
-        
-        if selected_alt_model:
-            final_url = f"https://www.arabam.com{alt_models[selected_alt_model]}?minYear=2015&maxkm={MAX_KM}"
-            st.write(f"Seçilen URL: {final_url}")
-            
-            if st.button("Verileri Çek"):
-                response = requests.get(final_url, headers=headers)
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    ilanlar = []
-                    
-                    ilan_elements = soup.select(".listing-item")
-                    for ilan in ilan_elements:
-                        try:
-                            title = ilan.select_one(".listing-title").text.strip()
-                            price = ilan.select_one(".listing-price").text.strip().replace("TL", "").replace(".", "").strip()
-                            price = int(price) if price.isdigit() else None
-                            km = ilan.select_one(".listing-detail-specifications .value").text.strip().replace(" km", "").replace(".", "").strip()
-                            km = int(km) if km.isdigit() else None
-                            year = ilan.select_one(".listing-model-year").text.strip()
-                            year = int(year) if year.isdigit() else None
-                            link = f"https://www.arabam.com{ilan.select_one('a')['href']}"
-                            
-                            if (year and (2025 - year) <= MAX_YAS) and (km and km <= MAX_KM) and (price and price <= MAX_FIYAT):
-                                ilanlar.append({
-                                    "Başlık": title,
-                                    "Fiyat": price,
-                                    "KM": km,
-                                    "Yıl": year,
-                                    "Link": link
-                                })
-                        except Exception as e:
-                            print(f"Hata: {e}")
-                    
-                    df = pd.DataFrame(ilanlar)
-                    if not df.empty:
-                        st.dataframe(df)
-                        df.to_excel("arabam_veriler.xlsx", index=False)
-                        st.success("Veriler başarıyla kaydedildi!")
-                    else:
-                        st.error("Belirtilen kriterlere uygun ilan bulunamadı.")
+            soup = BeautifulSoup(response.text, "html.parser")
+            ilanlar = []
+            for ilan in soup.select(".listing-item"):
+                try:
+                    fiyat = ilan.select_one(".listing-price").text.strip().replace("TL", "").replace(".", "").strip()
+                    fiyat = int(fiyat) if fiyat.isdigit() else 0
+                    model_yili = int(ilan.select_one(".listing-model-year").text.strip())
+                    km = int(ilan.select_one(".listing-km").text.strip().replace("km", "").replace(".", "").strip())
+                    link = BASE_URL + ilan.select_one(".listing-item a")["href"]
+
+                    # Filtreleri uygula
+                    if model_yili >= (2025 - MAX_YAS) and km <= MAX_KM and fiyat <= MAX_FIYAT:
+                        ilanlar.append({
+                            "Fiyat": fiyat,
+                            "Model Yılı": model_yili,
+                            "Kilometre": km,
+                            "Link": link
+                        })
+                except Exception as e:
+                    print("Hata:", e)
+
+            # Verileri DataFrame'e çevir ve göster
+            if ilanlar:
+                df = pd.DataFrame(ilanlar)
+                st.write(df)
+                df.to_excel("arabam_verileri.xlsx", index=False)
+                st.success("Veriler başarıyla çekildi ve arabam_verileri.xlsx olarak kaydedildi!")
+            else:
+                st.warning("Belirtilen kriterlere uygun ilan bulunamadı!")
