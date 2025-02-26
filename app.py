@@ -1,103 +1,122 @@
 import streamlit as st
 import requests
-import pandas as pd
 from bs4 import BeautifulSoup
+import pandas as pd
 
-# Arabam.com URL'leri
+# Arabam.com ana URL'si
 BASE_URL = "https://www.arabam.com"
-MARKA_URL = f"{BASE_URL}/arabalar"
 
-# Kullanıcı filtreleri
-MAX_YAS = 10  # 10 yaşından büyük olmayacak
-MAX_KM = 150000  # 150.000 km’den fazla olmayacak
-MAX_FIYAT = 1750000  # 1.750.000 TL’den pahalı olmayacak
+# Sabit filtreler
+MAX_YAS = 10  # 10 yaşından büyük araçları almaz
+MAX_KM = 150000  # 150.000 km üstü araçları almaz
+MAX_FIYAT = 1750000  # 1.750.000 TL’den pahalı araçları almaz
 
-# Header bilgisi (Bot engellemeyi aşmak için)
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+st.title("Arabam.com Araç Veri Çekme Uygulaması 🚗")
 
-# Arabam.com'dan markaları al
 @st.cache_data
 def get_brands():
-    response = requests.get(MARKA_URL, headers=HEADERS)
-    if response.status_code != 200:
-        return []
+    """Arabam.com'dan marka listesini çeker."""
+    url = f"{BASE_URL}/ikinci-el/otomobil"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, "html.parser")
-    brands = {item.text.strip(): item["href"] for item in soup.select(".brand-item a")}
-    return brands
 
-# Seçilen markaya göre modelleri al
+    brand_list = []
+    for brand in soup.select("ul.category-list a"):
+        brand_name = brand.text.strip()
+        brand_url = brand["href"]
+        brand_list.append((brand_name, brand_url))
+
+    return brand_list
+
 @st.cache_data
 def get_models(brand_url):
-    response = requests.get(BASE_URL + brand_url, headers=HEADERS)
-    if response.status_code != 200:
-        return []
+    """Seçilen markaya göre model listesini çeker."""
+    url = f"{BASE_URL}{brand_url}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, "html.parser")
-    models = {item.text.strip(): item["href"] for item in soup.select(".model-item a")}
-    return models
 
-# Seçilen modele göre alt modelleri al
+    model_list = []
+    for model in soup.select("ul.category-list a"):
+        model_name = model.text.strip()
+        model_url = model["href"]
+        model_list.append((model_name, model_url))
+
+    return model_list
+
 @st.cache_data
 def get_submodels(model_url):
-    response = requests.get(BASE_URL + model_url, headers=HEADERS)
-    if response.status_code != 200:
-        return []
+    """Seçilen modele göre alt model listesini çeker."""
+    url = f"{BASE_URL}{model_url}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, "html.parser")
-    submodels = {item.text.strip(): item["href"] for item in soup.select(".submodel-item a")}
-    return submodels
 
-# Sayfa başlığı
-st.title("Arabam.com Veri Çekme Uygulaması")
+    submodel_list = []
+    for submodel in soup.select("ul.category-list a"):
+        submodel_name = submodel.text.strip()
+        submodel_url = submodel["href"]
+        submodel_list.append((submodel_name, submodel_url))
 
-# Marka seçimi
+    return submodel_list
+
+def scrape_data(selected_url):
+    """Seçilen alt model için araç verilerini çeker ve filtreler uygular."""
+    url = f"{BASE_URL}{selected_url}?minYear=2015&maxkm=150000"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    car_data = []
+    for listing in soup.select(".listing-item"):
+        try:
+            title = listing.select_one(".listing-title").text.strip()
+            price = listing.select_one(".listing-price").text.strip().replace(" TL", "").replace(".", "")
+            price = int(price) if price.isdigit() else None
+            details = listing.select(".listing-detail-line")
+            km = int(details[0].text.strip().replace(" km", "").replace(".", ""))
+            year = int(details[1].text.strip())
+            link = BASE_URL + listing.select_one("a")["href"]
+
+            # Filtreleri uygulayalım
+            if price and price <= MAX_FIYAT and km <= MAX_KM and (2025 - year) <= MAX_YAS:
+                car_data.append([title, price, km, year, link])
+        except Exception as e:
+            print(f"Hata: {e}")
+
+    df = pd.DataFrame(car_data, columns=["Başlık", "Fiyat (TL)", "Kilometre", "Yıl", "Link"])
+    return df
+
+# Dropdown menüleri oluştur
 brands = get_brands()
-brand_name = st.selectbox("Marka Seçin", ["Seçiniz"] + list(brands.keys()))
+brand_names = [b[0] for b in brands]
+selected_brand = st.selectbox("Marka Seçiniz", brand_names)
 
-# Model seçimi (Eğer marka seçilmişse)
-if brand_name != "Seçiniz":
-    models = get_models(brands[brand_name])
-    model_name = st.selectbox("Model Seçin", ["Seçiniz"] + list(models.keys()))
-else:
-    model_name = "Seçiniz"
+if selected_brand:
+    brand_url = dict(brands)[selected_brand]
+    models = get_models(brand_url)
+    model_names = [m[0] for m in models]
+    selected_model = st.selectbox("Model Seçiniz", model_names)
 
-# Alt model seçimi (Eğer model seçilmişse)
-if model_name != "Seçiniz":
-    submodels = get_submodels(models[model_name])
-    submodel_name = st.selectbox("Alt Model Seçin", ["Seçiniz"] + list(submodels.keys()))
-else:
-    submodel_name = "Seçiniz"
+    if selected_model:
+        model_url = dict(models)[selected_model]
+        submodels = get_submodels(model_url)
+        submodel_names = [s[0] for s in submodels]
+        selected_submodel = st.selectbox("Alt Model Seçiniz", submodel_names)
 
-# "Verileri Çek" butonu (Eğer her şey seçilmişse aktif olur)
-if submodel_name != "Seçiniz":
-    if st.button("Verileri Çek"):
-        ilan_url = f"{BASE_URL}{submodels[submodel_name]}?minYear=2015&maxkm=150000"
-        response = requests.get(ilan_url, headers=HEADERS)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            ilanlar = []
-            for ilan in soup.select(".listing-item"):
-                try:
-                    fiyat = ilan.select_one(".listing-price").text.strip().replace("TL", "").replace(".", "").strip()
-                    fiyat = int(fiyat) if fiyat.isdigit() else 0
-                    model_yili = int(ilan.select_one(".listing-model-year").text.strip())
-                    km = int(ilan.select_one(".listing-km").text.strip().replace("km", "").replace(".", "").strip())
-                    link = BASE_URL + ilan.select_one(".listing-item a")["href"]
+        if selected_submodel:
+            submodel_url = dict(submodels)[selected_submodel]
 
-                    # Filtreleri uygula
-                    if model_yili >= (2025 - MAX_YAS) and km <= MAX_KM and fiyat <= MAX_FIYAT:
-                        ilanlar.append({
-                            "Fiyat": fiyat,
-                            "Model Yılı": model_yili,
-                            "Kilometre": km,
-                            "Link": link
-                        })
-                except Exception as e:
-                    print("Hata:", e)
+            if st.button("Verileri Çek"):
+                df = scrape_data(submodel_url)
+                if not df.empty:
+                    st.dataframe(df)
 
-            # Verileri DataFrame'e çevir ve göster
-            if ilanlar:
-                df = pd.DataFrame(ilanlar)
-                st.write(df)
-                df.to_excel("arabam_verileri.xlsx", index=False)
-                st.success("Veriler başarıyla çekildi ve arabam_verileri.xlsx olarak kaydedildi!")
-            else:
-                st.warning("Belirtilen kriterlere uygun ilan bulunamadı!")
+                    # Excel olarak indirilebilir hale getirelim
+                    excel_filename = "arabam_verileri.xlsx"
+                    df.to_excel(excel_filename, index=False)
+                    with open(excel_filename, "rb") as f:
+                        st.download_button("Excel olarak indir", f, file_name=excel_filename)
+                else:
+                    st.warning("Hiçbir veri bulunamadı!")
