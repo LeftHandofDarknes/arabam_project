@@ -32,6 +32,7 @@ if st.button("Verileri Çek"):
     
     for marka, modeller in TARGET_CARS.items():
         for model in modeller:
+            # URL oluşturuluyor: marka ve model isimleri formatlanıyor
             url = f"https://www.arabam.com/ikinci-el/otomobil/{marka.lower().replace(' ', '-')}-{model.lower().replace(' ', '-')}"
             
             response = requests.get(url, headers=headers)
@@ -44,20 +45,44 @@ if st.button("Verileri Çek"):
             
             for ilan in ilanlar:
                 try:
-                    ilan_baslik = ilan.find("h3", class_="listing-title").text.strip()
-                    fiyat = ilan.find("div", class_="listing-price").text.strip().replace(" TL", "").replace(".", "")
-                    fiyat = int(fiyat) if fiyat.isdigit() else None
-                    km = ilan.find("div", class_="listing-detail").text.strip().split(" ")[0].replace(".", "")
-                    km = int(km) if km.isdigit() else None
-                    yil = int(ilan_baslik.split(" ")[-1]) if ilan_baslik.split(" ")[-1].isdigit() else None
-                    ilan_tarihi_str = ilan.find("span", class_="listing-date").text.strip()
+                    title_tag = ilan.find("h3", class_="listing-title")
+                    if title_tag is None:
+                        continue
+                    ilan_baslik = title_tag.text.strip()
+
+                    price_tag = ilan.find("div", class_="listing-price")
+                    if price_tag is None:
+                        continue
+                    fiyat_str = price_tag.text.strip().replace(" TL", "").replace(".", "")
+                    fiyat = int(fiyat_str) if fiyat_str.isdigit() else None
+
+                    detail_tag = ilan.find("div", class_="listing-detail")
+                    if detail_tag is None:
+                        continue
+                    km_str = detail_tag.text.strip().split(" ")[0].replace(".", "")
+                    km = int(km_str) if km_str.isdigit() else None
+
+                    # İlan başlığından yıl bilgisi çekiliyor
+                    yil_str = ilan_baslik.split(" ")[-1]
+                    yil = int(yil_str) if yil_str.isdigit() else None
+
+                    date_tag = ilan.find("span", class_="listing-date")
+                    if date_tag is None:
+                        continue
+                    ilan_tarihi_str = date_tag.text.strip()
                     ilan_tarihi = datetime.strptime(ilan_tarihi_str, "%d.%m.%Y") if ilan_tarihi_str else None
-                    sehir_ilce = ilan.find("div", class_="listing-location").text.strip()
-                    
+
+                    location_tag = ilan.find("div", class_="listing-location")
+                    sehir_ilce = location_tag.text.strip() if location_tag else ""
+
                     if yil and km and fiyat and ilan_tarihi:
-                        if yil >= (datetime.now().year - MAX_YAS) and km <= MAX_KM and fiyat <= MAX_FIYAT and ilan_tarihi >= ILAN_TARIHI_LIMIT:
+                        if (yil >= (datetime.now().year - MAX_YAS) and 
+                            km <= MAX_KM and 
+                            fiyat <= MAX_FIYAT and 
+                            ilan_tarihi >= ILAN_TARIHI_LIMIT):
                             data.append([marka, model, ilan_baslik, yil, km, fiyat, ilan_tarihi_str, sehir_ilce])
-                except:
+                except Exception as e:
+                    st.write(f"İlan işlenirken hata oluştu: {e}")
                     continue
     
     df = pd.DataFrame(data, columns=["Marka", "Model", "İlan Başlığı", "Yıl", "KM", "Fiyat", "İlan Tarihi", "Şehir/İlçe"])
